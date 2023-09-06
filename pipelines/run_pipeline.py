@@ -15,9 +15,10 @@ from __future__ import absolute_import
 
 import argparse
 import json
+import os
 import sys
 import traceback
-
+sys.path.append(os.getcwd())
 from pipelines._utils import get_pipeline_driver, convert_struct, get_pipeline_custom_tags
 
 
