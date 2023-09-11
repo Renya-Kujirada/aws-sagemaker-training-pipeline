@@ -49,6 +49,7 @@ from sagemaker.workflow.pipeline_context import PipelineSession
 
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
+LOCAL_MODE = True
 
 def get_sagemaker_client(region):
      """Gets the sagemaker client.
@@ -87,7 +88,7 @@ def get_session(region, default_bucket):
         default_bucket=default_bucket,
     )
 
-def get_pipeline_session(region, default_bucket):
+def get_pipeline_session(region, default_bucket, is_local=False):
     """Gets the pipeline session based on the region.
 
     Args:
@@ -100,12 +101,22 @@ def get_pipeline_session(region, default_bucket):
 
     boto_session = boto3.Session(region_name=region)
     sagemaker_client = boto_session.client("sagemaker")
-
-    return PipelineSession(
-        boto_session=boto_session,
-        sagemaker_client=sagemaker_client,
-        default_bucket=default_bucket,
-    )
+    
+    if is_local == True:
+        print("#"*30)
+        print("Local Mode")
+        print("#"*30)
+        from sagemaker.workflow.pipeline_context import LocalPipelineSession
+        return LocalPipelineSession(
+            boto_session=boto_session,
+            default_bucket=default_bucket,
+        )
+    else:
+        return PipelineSession(
+            boto_session=boto_session,
+            sagemaker_client=sagemaker_client,
+            default_bucket=default_bucket,
+        )
 
 def get_pipeline_custom_tags(new_tags, region, sagemaker_project_name=None):
     try:
@@ -147,7 +158,16 @@ def get_pipeline(
     if role is None:
         role = sagemaker.session.get_execution_role(sagemaker_session)
 
-    pipeline_session = get_pipeline_session(region, default_bucket)
+    if LOCAL_MODE:
+        processing_instance_type = ParameterString(
+            name="processing_instance_type",
+            default_value="local",
+        )
+        training_instance_type = ParameterString(
+            name="training_instance_type",
+            default_value="local",
+        )
+    pipeline_session = get_pipeline_session(region, default_bucket, LOCAL_MODE)
 
     # parameters for pipeline execution
     processing_instance_count = ParameterInteger(name="ProcessingInstanceCount", default_value=1)
@@ -187,12 +207,13 @@ def get_pipeline(
     image_uri = sagemaker.image_uris.retrieve(
         framework="xgboost",
         region=region,
-        version="1.0-1",
+        version="1.5-1",
         py_version="py3",
         instance_type=training_instance_type,
     )
     xgb_train = Estimator(
         image_uri=image_uri,
+        entry_point=os.path.join(BASE_DIR, "train.py"),
         instance_type=training_instance_type,
         instance_count=1,
         output_path=model_path,
@@ -201,14 +222,14 @@ def get_pipeline(
         role=role,
     )
     xgb_train.set_hyperparameters(
-        objective="reg:linear",
-        num_round=50,
+        objective="reg:squarederror",
+        learning_rate=0.01,
+        num_round=300,
         max_depth=5,
         eta=0.2,
         gamma=4,
         min_child_weight=6,
         subsample=0.7,
-        silent=0,
     )
     step_args = xgb_train.fit(
         inputs={
@@ -314,7 +335,11 @@ def get_pipeline(
         if_steps=[step_register],
         else_steps=[],
     )
-
+    
+    if LOCAL_MODE:
+        steps = [step_process, step_train, step_eval]
+    else:
+        steps= [step_process, step_train, step_eval, step_cond]
     # pipeline instance
     pipeline = Pipeline(
         name=pipeline_name,
@@ -325,7 +350,7 @@ def get_pipeline(
             model_approval_status,
             input_data,
         ],
-        steps=[step_process, step_train, step_eval, step_cond],
+        steps=steps,
         sagemaker_session=pipeline_session,
     )
     return pipeline
