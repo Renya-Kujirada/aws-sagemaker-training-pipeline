@@ -11,6 +11,7 @@ Implements a get_pipeline(**kwargs) method.
 import os
 
 import boto3
+import datetime
 import sagemaker
 import sagemaker.session
 
@@ -32,6 +33,7 @@ from sagemaker.workflow.condition_step import (
 )
 from sagemaker.workflow.functions import (
     JsonGet,
+    Join
 )
 from sagemaker.workflow.parameters import (
     ParameterInteger,
@@ -46,10 +48,17 @@ from sagemaker.workflow.steps import (
 from sagemaker.workflow.model_step import ModelStep
 from sagemaker.model import Model
 from sagemaker.workflow.pipeline_context import PipelineSession
+from sagemaker.workflow.execution_variables import ExecutionVariables
 
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-LOCAL_MODE = True
+LOCAL_MODE = False
+
+def get_timestamp():
+    t_delta = datetime.timedelta(hours=9)
+    JST = datetime.timezone(t_delta, 'JST')
+    now = datetime.datetime.now(JST)
+    return now.strftime('%Y%m%d%H%M%S')
 
 def get_sagemaker_client(region):
      """Gets the sagemaker client.
@@ -102,7 +111,7 @@ def get_pipeline_session(region, default_bucket, is_local=False):
     boto_session = boto3.Session(region_name=region)
     sagemaker_client = boto_session.client("sagemaker")
     
-    if is_local == True:
+    if is_local:
         print("#"*30)
         print("Local Mode")
         print("#"*30)
@@ -165,7 +174,7 @@ def get_pipeline(
         )
         training_instance_type = ParameterString(
             name="training_instance_type",
-            default_value="local",
+            default_value="local_gpu",
         )
     pipeline_session = get_pipeline_session(region, default_bucket, LOCAL_MODE)
 
@@ -178,7 +187,17 @@ def get_pipeline(
         name="InputDataUrl",
         default_value=f"s3://sagemaker-servicecatalog-seedcode-{region}/dataset/abalone-dataset.csv",
     )
-
+    
+    # settings for s3 path of artifacts
+    output_suffix = Join(
+        on="-",
+        values=[get_timestamp(), ExecutionVariables.PIPELINE_EXECUTION_ID]
+    )
+    output_path = Join(
+        on="/",
+        values=["s3:/", default_bucket, base_job_prefix, output_suffix, "output"]
+    )
+    
     # processing step for feature engineering
     sklearn_processor = SKLearnProcessor(
         framework_version="0.23-1",
@@ -190,9 +209,9 @@ def get_pipeline(
     )
     step_args = sklearn_processor.run(
         outputs=[
-            ProcessingOutput(output_name="train", source="/opt/ml/processing/train"),
-            ProcessingOutput(output_name="validation", source="/opt/ml/processing/validation"),
-            ProcessingOutput(output_name="test", source="/opt/ml/processing/test"),
+            ProcessingOutput(output_name="train", source="/opt/ml/processing/train", destination=Join(on="/", values=[output_path, "preprocess"])),
+            ProcessingOutput(output_name="validation", source="/opt/ml/processing/validation", destination=Join(on="/", values=[output_path, "preprocess"])),
+            ProcessingOutput(output_name="test", source="/opt/ml/processing/test", destination=Join(on="/", values=[output_path, "preprocess"])),
         ],
         code=os.path.join(BASE_DIR, "preprocess.py"),
         arguments=["--input-data", input_data],
@@ -203,7 +222,6 @@ def get_pipeline(
     )
 
     # training step for generating model artifacts
-    model_path = f"s3://{sagemaker_session.default_bucket()}/{base_job_prefix}/AbaloneTrain"
     image_uri = sagemaker.image_uris.retrieve(
         framework="xgboost",
         region=region,
@@ -216,7 +234,7 @@ def get_pipeline(
         entry_point=os.path.join(BASE_DIR, "train.py"),
         instance_type=training_instance_type,
         instance_count=1,
-        output_path=model_path,
+        output_path=Join(on="/", values=[output_path, "train_xgb"]), 
         base_job_name=f"{base_job_prefix}/abalone-train",
         sagemaker_session=pipeline_session,
         role=role,
@@ -251,7 +269,48 @@ def get_pipeline(
         name="TrainAbaloneModel",
         step_args=step_args,
     )
-
+    
+    ###########################################################
+    # pytorch estimator version
+    from sagemaker.pytorch import PyTorch
+    
+    estimator = PyTorch(
+        entry_point="test_torch.py",
+        source_dir=BASE_DIR,
+        output_path=Join(on="/", values=[output_path, "train_xgb_torch"]),
+        role=role,
+        py_version="py38",
+        framework_version="1.11.0",
+        instance_type=training_instance_type,
+        instance_count=1,
+    )
+    estimator.set_hyperparameters(
+        objective="reg:squarederror",
+        learning_rate=0.01,
+        num_round=300,
+        max_depth=5,
+        eta=0.2,
+        gamma=4,
+        min_child_weight=6,
+        subsample=0.7,
+    )
+    step_train_torch = TrainingStep(
+        estimator=estimator,
+        name="TrainAbaloneTorchModel",
+        inputs={"train": TrainingInput(
+                s3_data=step_process.properties.ProcessingOutputConfig.Outputs[
+                    "train"
+                ].S3Output.S3Uri,
+                content_type="text/csv",),
+            "validation": TrainingInput(
+                s3_data=step_process.properties.ProcessingOutputConfig.Outputs[
+                    "validation"
+                ].S3Output.S3Uri,
+                content_type="text/csv",),
+            }
+    )
+    ###########################################################
+    
     # processing step for evaluation
     script_eval = ScriptProcessor(
         image_uri=image_uri,
@@ -276,7 +335,7 @@ def get_pipeline(
             ),
         ],
         outputs=[
-            ProcessingOutput(output_name="evaluation", source="/opt/ml/processing/evaluation"),
+            ProcessingOutput(output_name="evaluation", source="/opt/ml/processing/evaluation", destination=Join(on="/", values=[output_path, "eval"])),
         ],
         code=os.path.join(BASE_DIR, "evaluate.py"),
     )
@@ -294,8 +353,9 @@ def get_pipeline(
     # register model step that will be conditionally executed
     model_metrics = ModelMetrics(
         model_statistics=MetricsSource(
-            s3_uri="{}/evaluation.json".format(
-                step_eval.arguments["ProcessingOutputConfig"]["Outputs"][0]["S3Output"]["S3Uri"]
+            s3_uri=Join(
+                on="/",
+                values=[output_path, "metrics", "evaluation.json"]
             ),
             content_type="application/json"
         )
@@ -337,9 +397,9 @@ def get_pipeline(
     )
     
     if LOCAL_MODE:
-        steps = [step_process, step_train, step_eval]
+        steps = [step_process, step_train, step_train_torch, step_eval]
     else:
-        steps= [step_process, step_train, step_eval, step_cond]
+        steps= [step_process, step_train, step_train_torch, step_eval, step_cond]
     # pipeline instance
     pipeline = Pipeline(
         name=pipeline_name,
