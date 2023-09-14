@@ -9,6 +9,7 @@ export SAGEMAKER_PIPELINE_NAME="sagemaker-mlops-training-pipeline"
 export SAGEMAKER_PIPELINE_ROLE_ARN="arn:aws:iam::081978453918:role/service-role/AmazonSageMakerServiceCatalogProductsExecutionRole"
 export ARTIFACT_BUCKET="sagemaker-project-p-vvanybvjhjwe"
 export AWS_REGION="ap-northeast-1"
+export LOCAL_MODE="TRUE"
 
 python3 pipelines/run_pipeline.py --module-name pipelines.abalone.pipeline \
           --role-arn $SAGEMAKER_PIPELINE_ROLE_ARN \
@@ -20,6 +21,7 @@ python3 pipelines/run_pipeline.py --module-name pipelines.abalone.pipeline \
                      \"pipeline_name\":\"${SAGEMAKER_PROJECT_NAME_ID}\", \
                      \"model_package_group_name\":\"${SAGEMAKER_PROJECT_NAME_ID}\", \
                      \"base_job_prefix\":\"${SAGEMAKER_PROJECT_NAME_ID}\", \
-                     \"sagemaker_project_name\":\"${SAGEMAKER_PROJECT_NAME}\"}"
+                     \"sagemaker_project_name\":\"${SAGEMAKER_PROJECT_NAME}\", \
+                     \"local_mode\":\"${LOCAL_MODE}\"}"
 
 echo "Create/Update of the SageMaker Pipeline and execution completed."

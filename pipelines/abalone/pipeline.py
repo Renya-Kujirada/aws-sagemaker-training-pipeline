@@ -15,6 +15,7 @@ import datetime
 import sagemaker
 import sagemaker.session
 
+from distutils.util import strtobool
 from sagemaker.estimator import Estimator
 from sagemaker.inputs import TrainingInput
 from sagemaker.model_metrics import (
@@ -52,7 +53,6 @@ from sagemaker.workflow.execution_variables import ExecutionVariables
 
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-LOCAL_MODE = False
 
 def get_timestamp():
     t_delta = datetime.timedelta(hours=9)
@@ -152,6 +152,7 @@ def get_pipeline(
     base_job_prefix="Abalone",
     processing_instance_type="ml.m5.xlarge",
     training_instance_type="ml.m5.xlarge",
+    local_mode="FALSE"
 ):
     """Gets a SageMaker ML Pipeline instance working with on abalone data.
 
@@ -167,7 +168,8 @@ def get_pipeline(
     if role is None:
         role = sagemaker.session.get_execution_role(sagemaker_session)
 
-    if LOCAL_MODE:
+    local_mode = strtobool(local_mode) # convert str to boolean
+    if local_mode:
         processing_instance_type = ParameterString(
             name="processing_instance_type",
             default_value="local",
@@ -176,7 +178,7 @@ def get_pipeline(
             name="training_instance_type",
             default_value="local_gpu",
         )
-    pipeline_session = get_pipeline_session(region, default_bucket, LOCAL_MODE)
+    pipeline_session = get_pipeline_session(region, default_bucket, local_mode)
 
     # parameters for pipeline execution
     processing_instance_count = ParameterInteger(name="ProcessingInstanceCount", default_value=1)
@@ -396,7 +398,7 @@ def get_pipeline(
         else_steps=[],
     )
     
-    if LOCAL_MODE:
+    if local_mode:
         steps = [step_process, step_train, step_train_torch, step_eval]
     else:
         steps= [step_process, step_train, step_train_torch, step_eval, step_cond]
