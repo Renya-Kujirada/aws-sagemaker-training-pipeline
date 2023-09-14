@@ -3,11 +3,11 @@
 cd `dirname $0`
 export PYTHONUNBUFFERED=TRUE
 export SAGEMAKER_PROJECT_NAME="mlops-training-pipeline"
-export SAGEMAKER_PROJECT_ID="p-vvanybvjhjwe-kujira"
+export SAGEMAKER_PROJECT_ID="p-vvanybvjhjwe-kujira2"
 export SAGEMAKER_PROJECT_NAME_ID="${SAGEMAKER_PROJECT_NAME}-${SAGEMAKER_PROJECT_ID}"
 export SAGEMAKER_PIPELINE_NAME="sagemaker-mlops-training-pipeline"
 export SAGEMAKER_PIPELINE_ROLE_ARN="arn:aws:iam::081978453918:role/service-role/AmazonSageMakerServiceCatalogProductsExecutionRole"
-export ARTIFACT_BUCKE="sagemaker-project-p-vvanybvjhjwe"
+export ARTIFACT_BUCKET="sagemaker-project-p-vvanybvjhjwe"
 export AWS_REGION="ap-northeast-1"
 
 python3 pipelines/run_pipeline.py --module-name pipelines.abalone.pipeline \
